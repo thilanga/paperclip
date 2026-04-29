@@ -2663,19 +2663,36 @@ export function agentRoutes(
   });
 
   router.post("/heartbeat-runs/:runId/cancel", async (req, res) => {
-    assertBoard(req);
     const runId = req.params.runId as string;
-    const existing = await heartbeat.getRun(runId);
-    if (existing) {
+
+    if (req.actor.type === "agent") {
+      // Agent path: only the run's own agent may cancel it
+      const existing = await heartbeat.getRun(runId);
+      if (!existing) {
+        res.status(404).json({ error: "Heartbeat run not found" });
+        return;
+      }
       assertCompanyAccess(req, existing.companyId);
+      if (existing.agentId !== req.actor.agentId) {
+        throw forbidden("Agent can only cancel its own heartbeat runs");
+      }
+    } else {
+      // Board path: unchanged
+      assertBoard(req);
+      const existing = await heartbeat.getRun(runId);
+      if (existing) {
+        assertCompanyAccess(req, existing.companyId);
+      }
     }
+
     const run = await heartbeat.cancelRun(runId);
 
     if (run) {
+      const actorInfo = getActorInfo(req);
       await logActivity(db, {
         companyId: run.companyId,
-        actorType: "user",
-        actorId: req.actor.userId ?? "board",
+        actorType: actorInfo.actorType,
+        actorId: actorInfo.actorId,
         action: "heartbeat.cancelled",
         entityType: "heartbeat_run",
         entityId: run.id,
